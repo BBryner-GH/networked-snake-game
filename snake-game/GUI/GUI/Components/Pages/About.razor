@@ -1,0 +1,61 @@
+﻿@page "/"
+
+<!-- 
+Implemented by Brenden Bryner and Ryan Storm
+11/17/2025
+-->
+
+<!-- About page  -->
+
+<PageTitle>About - Snake Game</PageTitle>
+
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="text-center mb-4">
+                <h1>Snake Game</h1>
+                <p class="lead">By Ryan Storm and Brenden Bryner</p>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h3 class="card-title">Overview</h3>
+                    <p>Snake Client implemented by Brenden Bryner and Ryan Storm in the theme of TRON</p>
+                    <ul>
+                        <p>Connecting:</p>
+                        <li>Enter server address in first box</li>
+                        <li>Port Number On Second Box</li>
+                        <li>Enter a player name that will appear above the snake (16 or less characters)</li>
+                        <li>Error box will tell you about connection errors or errors with the snake name</li>
+                        <li>W, A, S, D to move snake in different directions</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h3 class="card-title">Basic Implementation and Game Rules</h3>
+                        <ul>
+                        <li>Each player controls a snake that can slither around the world and collect powerups (food) to grow its length.</li>
+                        <li>The world can contain zero or more wall sections. Snakes can not go through walls.</li>
+                        <li>The world can include zero or more powerups, which if collected, grow the total length of the snake some fixed amount.</li>
+                        <li>A snake dies if it runs into a wall or another snake.</li>
+                        <li>A dead snake will respawn with a shorter length in a random unoccupied location after a certain amount of time.</li>
+                        </ul>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <h3 class="card-title">Other</h3>
+                    <p class="card-text">
+                        The game was implemented with a TRON theme, so the walls, background, and snakes have different sprites and designs. 
+                        There are 8 different snake colors and the bikes (situated on the head of the snake) also correspond to the different colors.
+                        
+                        When a snake dies, the bike will display an explosion animation.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

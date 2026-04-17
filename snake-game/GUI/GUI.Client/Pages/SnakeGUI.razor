@@ -1,0 +1,483 @@
+﻿@page "/snake"
+@rendermode InteractiveServer
+@using Blazor.Extensions
+@using Blazor.Extensions.Canvas
+@using Blazor.Extensions.Canvas.Canvas2D
+@using System.Diagnostics
+@using GUI.Client.Controllers
+@using GUI.Client.Models
+@inject IJSRuntime JsRuntime;
+
+<!-- Snake GUI implemented by Ryan Storm and Brenden Bryner -->
+
+<PageTitle>Snake</PageTitle>
+
+<!-- Image references -->
+
+<img @ref="backgroundImage" id="bgImage" src="images/bluebackgroundtron.png" alt="image" style="display:none;" />
+<img @ref="wallSprite" id="wall" src="images/BlueInsideWallTest.png" alt="image" style="display:none;" />
+<img @ref="redBikeSprite" id="redBike" src="images/BikeSprite_red.png" alt="image" style="display:none;" />
+<img @ref="blueBikeSprite" id="blueBike" src="images/BikeSprite_blue.png" alt="image" style="display:none;" />
+<img @ref="cyanBikeSprite" id="cyanBike" src="images/BikeSprite_cyan.png" alt="image" style="display:none;" />
+<img @ref="greenBikeSprite" id="greenBike" src="images/BikeSprite_green.png" alt="image" style="display:none;" />
+<img @ref="orangeBikeSprite" id="orangeBike" src="images/BikeSprite_orange.png" alt="image" style="display:none;" />
+<img @ref="pinkBikeSprite" id="pinkBike" src="images/BikeSprite_pink.png" alt="image" style="display:none;" />
+<img @ref="purpleBikeSprite" id="purpleBike" src="images/BikeSprite_purple.png" alt="image" style="display:none;" />
+<img @ref="yellowBikeSprite" id="yellowBike" src="images/BikeSprite_yellow.png" alt="image" style="display:none;" />
+<img @ref="explosionSpriteSheet" id="explosionSpriteSheet" src="images/spritsheet.png" alt="image" style="display:none;" />
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+
+
+<!-- Connection Input Boxes -->
+
+<div id="ConnectionInputs">
+    <div class="input-row">
+        <label for="url">Server Address:</label>
+        <input id="url" disabled="@_isConnected" type="text" @bind="_serverNameOrAddress" />
+        <label for="port">Port:</label>
+        <input id="port" disabled="@_isConnected" type="number" @bind="_serverPort" class="port" />
+        <label for="name">Name:</label>
+        <input id="name" disabled="@_isConnected" type="text" @bind="_playerName" maxlength="16" class="port" />
+        <label>Error Message:</label>
+        <input type="text" readonly value="@_errorMessage" class="info-input"/>
+
+        @if (_isConnected)
+        {
+            <button class="btn btn-primary" @onclick="DisconnectFromServer">Disconnect</button>
+        }
+        else
+        {
+            <button class="btn btn-primary" @onclick="ConnectToServerAsync">Connect</button>
+        }
+    </div>
+    
+</div>
+
+<div id="snakeCanvas" style="position: fixed; width: 100%; height: 100%">
+    <BECanvas Width="1000" Height="1000" @ref="_canvasReference"></BECanvas>
+</div>
+
+@code
+{
+    // ---------- Instance Variables ----------
+
+    // Canvas and rendering
+    private BECanvasComponent _canvasReference = null!;
+    private Canvas2DContext _context = null!;
+    private IJSObjectReference _jsModule = null!;
+    private string _errorMessage = "";
+    private int _viewSize = 1000;
+
+    // Network controller
+    private NetworkController _controller = new();
+
+    // Game state
+    private World _world;
+    private bool _gameRunning = false;
+
+    // Connection parameters
+    private string _playerName = "Player";
+    private string _serverNameOrAddress = "localhost";
+    private int _serverPort = 11000;
+    private bool _isConnected = false;
+
+    // ---------- Image Elements ----------
+
+    /// <summary>
+    /// C# reference to the html element for the background image
+    /// </summary>
+    private ElementReference backgroundImage;
+    private ElementReference wallSprite;
+    private ElementReference redBikeSprite;
+    private ElementReference blueBikeSprite;
+    private ElementReference cyanBikeSprite;
+    private ElementReference orangeBikeSprite;
+    private ElementReference pinkBikeSprite;
+    private ElementReference yellowBikeSprite;
+    private ElementReference greenBikeSprite;
+    private ElementReference purpleBikeSprite;
+    private ElementReference explosionSpriteSheet;
+
+    // ---------- Rendering ----------
+
+    /// <summary>
+    /// Called after the page is rendered. We use this to know when the first page load
+    /// has occurred so we can initialize various data and start the server and drawing loops
+    /// </summary>
+    /// <param name="firstRender"></param>
+    /// <returns></returns>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", "./Pages/SnakeGUI.razor.js");
+            _context = await _canvasReference.CreateCanvas2DAsync();
+            await JsRuntime.InvokeAsync<object>("initRenderJS", DotNetObjectReference.Create(this));
+            
+        }
+    }
+
+    /// <summary>
+    /// Game loop that draws the world every 20 milliseconds
+    /// </summary>
+    private async Task GameLoopAsync()
+    {
+        while (_gameRunning)
+        {
+            Thread.Sleep(20);
+            await DrawWorld();
+        }
+        
+        _ = ClearCanvasAsync();
+    }
+
+    /// <summary>
+    /// method to actually draw the world
+    /// </summary>
+    private async Task DrawWorld()
+    {
+        // batch the drawing calls for better performance
+        await _context.BeginBatchAsync();
+
+        // Copy world instance to stop race conditions
+        World copyWorld;
+        lock (_controller.World)
+        {
+            copyWorld = new World(_controller.World);
+        }
+        
+        // Clear old canvas frame
+        await _context.ClearRectAsync(0, 0, _viewSize, _viewSize);
+        
+        // clip the view so that objects drawn outside the canvas will not be shown
+        await _context.BeginPathAsync();
+        await _context.RectAsync( 0, 0, _viewSize, _viewSize );
+        await _context.ClipAsync();
+        
+        // Because we are modifying the transformation matrix, we need to save it so we can restore it at the end
+        await _context.SaveAsync();
+
+        // Get player snake
+        Snake playerSnake;
+        copyWorld.Snakes.TryGetValue(_controller.PlayerID, out playerSnake!);
+
+        // Center on origin, move to center of view port
+        await _context.TranslateAsync( _viewSize / 2.0, _viewSize / 2.0 );
+        await _context.TranslateAsync( -playerSnake.GetHead().X, -playerSnake.GetHead().Y );
+
+        // Draw the background
+        await _context.DrawImageAsync( backgroundImage, -copyWorld.Size / 2.0, -copyWorld.Size / 2.0, copyWorld.Size, copyWorld.Size );
+        
+        // Draw Snakes
+        await DrawSnakes(copyWorld);
+
+        // draw powerups
+        await DrawPowerUpes(copyWorld);
+
+        // draw walls
+        await DrawWalls(copyWorld);
+        
+        // draw explosions
+        await DrawExplosion(copyWorld);
+        
+        // restore the transformation matrix after done drawing everything
+        await _context.RestoreAsync();
+
+        // finish batch drawing
+        await _context.EndBatchAsync();
+    }
+
+    /// <summary>
+    /// this method loops through the dictionary of explosions and renders each individual explosion
+    /// </summary>
+    /// <param name="copyWorld">the copy of the world object</param>
+    private async Task DrawExplosion(World copyWorld)
+    {
+        // loop through all explosions
+        foreach (KeyValuePair<int, Explosion> kvp in copyWorld.Explosions)
+        {
+            // Setup data
+            Snake s = copyWorld.Snakes[kvp.Key];
+            Point2D head = s.GetHead();
+            Explosion explo = kvp.Value;
+            int srcX = explo.explosionFrame * 128;
+
+            
+            // save transformation matrix
+            await _context.SaveAsync();
+            
+            // move and transformation matrix for explosion 
+            await _context.TranslateAsync(head.X, head.Y);
+            
+            // draw explosion frame
+            await _context.DrawImageAsync(
+                explosionSpriteSheet,
+                srcX, 0, 128, 128,
+                -100/2.0, -100/2.0-25,
+                100, 100
+            );
+
+            // update the animation
+            lock (_world.Explosions)
+            {
+                Explosion realExplo = _world.Explosions[kvp.Key];
+                
+                realExplo.explosionTick++;
+                if (realExplo.explosionTick > 3)
+                {
+                    realExplo.explosionTick = 0;
+                    realExplo.explosionFrame++;
+                    if (realExplo.explosionFrame >= 12)
+                    {
+                        _world.Explosions.Remove(kvp.Key);
+                    }
+                }
+            }
+            
+            // restore transformation matrix
+            await _context.RestoreAsync();
+        }
+    }
+    
+    /// <summary>
+    /// this method loops through the dictionary of snakes and renders each individual snake
+    /// </summary>
+    /// <param name="copyWorld">the copy of the world object</param>
+    private async Task DrawSnakes(World copyWorld)
+    {
+        foreach (Snake s in copyWorld.Snakes.Values)
+        {
+            // assign each nake a color
+            int snakeColorID = s.snakeID % 8;
+
+            string color = snakeColorID switch
+            {
+                0 => "blue",
+                1 => "red",
+                2 => "orange",
+                3 => "purple",
+                4 => "yellow",
+                5 => "green",
+                6 => "pink",
+                7 => "cyan",
+                _ => String.Empty
+            };
+            
+            await _context.SetStrokeStyleAsync( color );
+            await _context.SetLineWidthAsync( 10 );
+            await _context.SetLineCapAsync( LineCap.Round );
+            
+            // draw snake body
+            for (int i = 0; i < s.body.Count - 1; i++)
+            {
+                await _context.BeginPathAsync();
+                await _context.MoveToAsync( s.body[i].X, s.body[i].Y );
+                await _context.LineToAsync( s.body[i+1].X,s.body[i+1].Y  );
+                await _context.StrokeAsync();
+            }
+
+            // get head position for score/name/bike image
+            Point2D headPosition = s.GetHead();
+            await _context.SetFillStyleAsync("white");
+            
+            // Render player name and score
+            await _context.SetFontAsync("15px Silkscreen");
+            await _context.SetTextAlignAsync(TextAlign.Center);
+            await _context.FillTextAsync($"{s.name}: {s.score}", headPosition.X, headPosition.Y - 20);
+            
+            // Bike sprite information
+            double spriteW = 32 / 2.0;
+            double spriteH = 72 / 2.0;
+            double angle = 0;
+            
+            // Rotate bike
+            if (s.dir.X == 1)
+                angle = Math.PI / 2;
+            else if (s.dir.X == -1)
+                angle = -Math.PI / 2;
+            else if (s.dir.Y == 1)
+                angle = Math.PI;
+            else if (s.dir.Y == -1)
+                angle = 0;
+            
+            // save transformation matrix
+            await _context.SaveAsync();
+            
+            // move and rotate transformation matrix for bike 
+            await _context.TranslateAsync(headPosition.X, headPosition.Y);
+            await _context.RotateAsync((float) angle);
+            
+            // draw bike sprite
+            await _context.DrawImageAsync(
+                GetBikeSpriteForSnake(snakeColorID),
+                -spriteW / 2.0, 
+                -spriteH / 2.0, 
+                spriteW, 
+                spriteH);
+            
+            // restore transformation matrix
+            await _context.RestoreAsync();
+        }
+    }
+    
+    /// <summary>
+    /// this method loops through the dictionary of power ups and renders each individual one
+    /// </summary>
+    /// <param name="copyWorld">the copy of the world object</param>
+    private async Task DrawPowerUpes(World copyWorld)
+    {
+        foreach (Powerup p in copyWorld.Powerups.Values)
+        {
+            await _context.SetLineWidthAsync( 5 );
+            await _context.SetStrokeStyleAsync( $"rgb( 255, 255, 0 )" );
+            await _context.BeginPathAsync();
+            await _context.ArcAsync( p.loc.X, p.loc.Y, 3, 0, 2 * Math.PI );
+            await _context.StrokeAsync();
+        }
+    }
+
+    /// <summary>
+    /// this method loops through the dictionary of walls and renders each individual one
+    /// </summary>
+    /// <param name="copyWorld">the copy of the world object</param>
+    private async Task DrawWalls(World copyWorld)
+    {
+        // loop through each wall in the copy
+        foreach (Wall wall in copyWorld.Walls.Values)
+        {
+            // the two wall endpoints
+            Point2D p1 = wall.p1;
+            Point2D p2 = wall.p2;
+
+            //horizontal walls
+            if (p1.Y == p2.Y)
+            {
+                // find leftmost and rightmost coordinates and then draw it
+                int minX = Math.Min(p1.X, p2.X);
+                int maxX = Math.Max(p1.X, p2.X);
+
+                for (int i = minX; i <= maxX; i += 50)
+                {
+                    await _context.DrawImageAsync( wallSprite, i - 25, p1.Y - 25, 50, 50 );
+                }
+            }
+            // vertical walls
+            else if (p1.X == p2.X)
+            {
+                // find topmost and bottom most coordinates and draw it 
+                int minY = Math.Min(p1.Y, p2.Y);
+                int maxY = Math.Max(p1.Y, p2.Y);
+
+                for (int i = minY; i <= maxY; i += 50)
+                {
+                    await _context.DrawImageAsync( wallSprite, p1.X - 25, i - 25, 50, 50 );
+                }
+            }
+        }
+    }
+    
+    // -------------- Connections ------------------
+
+    /// <summary>
+    /// Handler for the connect button
+    /// </summary>
+    private async Task ConnectToServerAsync()
+    {
+        // error messaging
+        if (string.IsNullOrEmpty(_playerName))
+        {
+            _errorMessage = "Please enter a valid player name";
+            return;
+        }
+        
+        // set message back to blank if no error
+        _errorMessage = "";
+        
+        // Create Network Controller
+        await _controller.ConnectControllerAsync(_serverNameOrAddress, _serverPort, _playerName);
+        _isConnected = true;
+
+        // Initialize world state
+        _world = _controller.World;
+
+        // Initialize canvas
+        _jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>("import", "./Pages/SnakeGUI.razor.js");
+        _context = await _canvasReference.CreateCanvas2DAsync();
+        await JsRuntime.InvokeAsync<object>("initRenderJS", DotNetObjectReference.Create(this));
+        
+        StateHasChanged();
+        
+        // Start game loop
+        if (!_gameRunning)
+        {
+            _gameRunning = true;
+            _ = GameLoopAsync();
+        }
+    }
+
+    /// <summary>
+    /// Method to disconnect from the server
+    /// </summary>
+    private void DisconnectFromServer()
+    {
+        _gameRunning = false;
+        _isConnected = false;
+        _controller.Disconnect();
+    }
+
+    /// <summary>
+    /// helper method to clear the canvas
+    /// </summary>
+    private async Task ClearCanvasAsync()
+    {
+        await _context.BeginBatchAsync();
+        await _context.ClearRectAsync(0, 0, _viewSize, _viewSize);
+        await _context.EndBatchAsync();
+    }
+
+    /// <summary>
+    /// Handler for key pressing (W=up, A=left, S=down, D=right)
+    /// </summary>
+    [JSInvokable]
+    public void HandleKeyPress(string key)
+    {
+
+        // Turn the key presses into commands
+        string direction = key.ToLower() switch
+        {
+            "w" => "up",
+            "a" => "left",
+            "s" => "down",
+            "d" => "right",
+            _ => "none"
+        };
+
+        // Send the command to the controller
+        if (direction != "none")
+        {
+            _controller.SendMovementCommand(direction);
+        }
+    }
+    
+    /// <summary>
+    /// helper method for choosing bike sprites with right color
+    /// </summary>
+    /// <param name="snakeColorID"></param>
+    /// <returns></returns>
+    private ElementReference GetBikeSpriteForSnake(int snakeColorID)
+    {
+        return snakeColorID switch
+        {
+            0 => blueBikeSprite,
+            1 => redBikeSprite,
+            2 => orangeBikeSprite,
+            3 => purpleBikeSprite,
+            4 => yellowBikeSprite,
+            5 => greenBikeSprite,
+            6 => pinkBikeSprite,
+            7 => cyanBikeSprite,
+            _ => blueBikeSprite
+        };
+    }
+    
+}
